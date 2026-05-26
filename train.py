@@ -127,15 +127,14 @@ def train_model(name, model, train_ds, val_ds, n_train, n_val, device, checkpoin
 
 
 def main():
-    set_seed(SEED)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
 
     os.makedirs('models/checkpoints', exist_ok=True)
     os.makedirs('results', exist_ok=True)
 
-    train_ds, val_ds, test_ds, n_train, n_val, n_test = load_data()
-    print(f"Split — train: {n_train:,}  val: {n_val:,}  test: {n_test:,}")
+    train_ds, val_ds, _, n_train, n_val, _ = load_data()
+    print(f"Split — train: {n_train:,}  val: {n_val:,}")
 
     mlp_epoch, mlp_val = train_model(
         'MLP', OptionsMLP(),

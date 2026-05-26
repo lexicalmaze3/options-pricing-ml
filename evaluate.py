@@ -24,32 +24,6 @@ BASELINE_BATCH = 50_000
 
 # ── data ─────────────────────────────────────────────────────────────────────
 
-def load_test_set():
-    df = pd.read_csv('data/options_dataset.csv')
-    df['type_encoded'] = (df['type'] == 'call').astype(float)
-    df['style_encoded'] = (df['style'] == 'american').astype(float)
-
-    feature_cols = ['spot', 'strike', 'tte', 'rate', 'vol', 'dividend', 'type_encoded', 'style_encoded']
-    X = df[feature_cols].values.astype(np.float32)
-    y = df['price'].values.astype(np.float32)
-    style = df['style_encoded'].values
-
-    X_tmp, X_test, y_tmp, y_test, _, s_test = train_test_split(
-        X, y, style, test_size=0.10, random_state=SEED, stratify=style
-    )
-    _, X_val, _, _ = train_test_split(X_tmp, y_tmp, test_size=0.1111, random_state=SEED, stratify=_)
-
-    with open('models/scaler.pkl', 'rb') as f:
-        scaler = pickle.load(f)
-    X_test_sc = scaler.transform(X_test).astype(np.float32)
-
-    # Rebuild test DataFrame with original (unscaled) features
-    test_df = df.iloc[df.index[~df.index.isin(
-        pd.read_csv('data/options_dataset.csv').index  # placeholder — use mask approach below
-    )]]
-    return X_test, X_test_sc, y_test, s_test, df
-
-
 def build_test_df():
     """Recreate the exact test split and return a DataFrame with all original columns."""
     df = pd.read_csv('data/options_dataset.csv')
@@ -62,22 +36,13 @@ def build_test_df():
     style = df['style_encoded'].values
     idx = np.arange(len(df))
 
-    idx_tmp, idx_test, _, _, s_tmp, _ = train_test_split(
-        idx, y, style, test_size=0.10, random_state=SEED, stratify=style
-    )
-    _, _, y_tmp = y[idx_tmp], None, y[idx_tmp]
-    s_tmp_arr = style[idx_tmp]
-    idx_train, idx_val = train_test_split(
-        idx_tmp, test_size=0.1111, random_state=SEED, stratify=s_tmp_arr
+    _, idx_test = train_test_split(
+        idx, test_size=0.10, random_state=SEED, stratify=style
     )
 
     test_df = df.iloc[idx_test].copy().reset_index(drop=True)
-    X_test = X[idx_test]
+    X_test_sc = pickle.load(open('models/scaler.pkl', 'rb')).transform(X[idx_test]).astype(np.float32)
     y_test = y[idx_test]
-
-    with open('models/scaler.pkl', 'rb') as f:
-        scaler = pickle.load(f)
-    X_test_sc = scaler.transform(X_test).astype(np.float32)
 
     return test_df, X_test_sc, y_test
 
@@ -132,14 +97,9 @@ def metrics(actual, predicted):
     return {'mae': mae, 'rmse': rmse, 'r2': r2, 'max_error': maxe}
 
 
-def breakdown(df, actual, predicted, label):
+def breakdown(df, actual, predicted):
     result = {}
-    err = np.abs(predicted - actual)
-
     moneyness = df['strike'].values / df['spot'].values
-    df = df.copy()
-    df['_moneyness'] = moneyness
-    df['_err'] = err
 
     for col, cats in [
         ('style', ['european', 'american']),
@@ -153,21 +113,22 @@ def breakdown(df, actual, predicted, label):
             result[col][cat] = metrics(actual[mask], predicted[mask])
 
     result['moneyness'] = {}
-    for cat, lo, hi in [('OTM', 1.1, np.inf), ('ATM', 0.9, 1.1), ('ITM', 0.0, 0.9)]:
-        mask = (moneyness > lo) & (moneyness <= hi) if lo > 0 else (moneyness >= lo) & (moneyness < hi)
-        if cat == 'OTM':
-            mask = moneyness > 1.1
-        elif cat == 'ATM':
-            mask = (moneyness >= 0.9) & (moneyness <= 1.1)
-        else:
-            mask = moneyness < 0.9
+    for cat, mask in [
+        ('OTM', moneyness > 1.1),
+        ('ATM', (moneyness >= 0.9) & (moneyness <= 1.1)),
+        ('ITM', moneyness < 0.9),
+    ]:
         if mask.sum() == 0:
             continue
         result['moneyness'][cat] = metrics(actual[mask], predicted[mask])
 
     result['expiry'] = {}
-    for cat, lo, hi in [('short', 0, 30), ('medium', 30, 180), ('long', 180, 9999)]:
-        mask = (df['tte'].values >= lo) & (df['tte'].values < hi)
+    tte = df['tte'].values
+    for cat, mask in [
+        ('short',  tte < 30),
+        ('medium', (tte >= 30) & (tte < 180)),
+        ('long',   tte >= 180),
+    ]:
         if mask.sum() == 0:
             continue
         result['expiry'][cat] = metrics(actual[mask], predicted[mask])
@@ -306,11 +267,11 @@ def main():
     print("Computing metrics...")
     all_metrics = {
         'MLP':         {'overall': metrics(actual, preds_mlp),
-                        'breakdown': breakdown(test_df, actual, preds_mlp, 'MLP')},
+                        'breakdown': breakdown(test_df, actual, preds_mlp)},
         'Transformer': {'overall': metrics(actual, preds_tfm),
-                        'breakdown': breakdown(test_df, actual, preds_tfm, 'Transformer')},
+                        'breakdown': breakdown(test_df, actual, preds_tfm)},
         'Baseline':    {'overall': metrics(actual, preds_base),
-                        'breakdown': breakdown(test_df, actual, preds_base, 'Baseline')},
+                        'breakdown': breakdown(test_df, actual, preds_base)},
     }
 
     os.makedirs('results', exist_ok=True)
