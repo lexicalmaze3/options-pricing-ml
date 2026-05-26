@@ -41,7 +41,8 @@ def build_test_df():
     )
 
     test_df = df.iloc[idx_test].copy().reset_index(drop=True)
-    X_test_sc = pickle.load(open('models/scaler.pkl', 'rb')).transform(X[idx_test]).astype(np.float32)
+    with open('models/scaler.pkl', 'rb') as f:
+        X_test_sc = pickle.load(f).transform(X[idx_test]).astype(np.float32)
     y_test = y[idx_test]
 
     return test_df, X_test_sc, y_test
